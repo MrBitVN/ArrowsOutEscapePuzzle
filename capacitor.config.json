@@ -1,0 +1,9 @@
+{
+  "appId": "com.arrowescape.puzzle",
+  "appName": "Arrow Escape",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}
