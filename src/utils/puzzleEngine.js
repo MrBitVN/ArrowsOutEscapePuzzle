@@ -10,41 +10,91 @@ export const DIRECTIONS = {
   right: { dx: 1, dy: 0, angle: 0 }
 };
 
-// Check if two line segments (p1-p2 and p3-p4) intersect
+// Visual stroke dimensions (matching GameScreen.jsx rendering)
+// Wall stroke: 5.5px (radius 2.75px), Arrow shaft stroke: 3.5px (radius 1.75px)
+export const WALL_COLLISION_RADIUS = 3.2;   // effective contact radius with walls
+export const ARROW_COLLISION_RADIUS = 2.8;  // effective contact radius between arrows
+
+/**
+ * Check if two 2D line segments (p1-p2 and p3-p4) intersect.
+ * Handles standard non-parallel intersection AND collinear overlapping segments.
+ */
 export function linesIntersect(x1, y1, x2, y2, x3, y3, x4, y4) {
-  const denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
-  if (Math.abs(denom) < 0.0001) return false; // Parallel
+  const d1x = x2 - x1;
+  const d1y = y2 - y1;
+  const d2x = x4 - x3;
+  const d2y = y4 - y3;
 
-  const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
-  const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
+  const denom = d2y * d1x - d2x * d1y;
 
-  return ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1;
-}
-
-// Get all line segments that make up an arrow
-export function getArrowSegments(arrow) {
-  if (arrow.type === 'bent' && arrow.points && arrow.points.length >= 2) {
-    const segs = [];
-    for (let i = 0; i < arrow.points.length - 1; i++) {
-      segs.push({
-        x1: arrow.points[i].x,
-        y1: arrow.points[i].y,
-        x2: arrow.points[i + 1].x,
-        y2: arrow.points[i + 1].y
-      });
-    }
-    return segs;
+  if (Math.abs(denom) > 1e-6) {
+    const ua = (d2x * (y1 - y3) - d2y * (x1 - x3)) / denom;
+    const ub = (d1x * (y1 - y3) - d1y * (x1 - x3)) / denom;
+    return ua >= -1e-6 && ua <= 1 + 1e-6 && ub >= -1e-6 && ub <= 1 + 1e-6;
   }
-  // Straight arrow
-  return [{
-    x1: arrow.startX,
-    y1: arrow.startY,
-    x2: arrow.endX,
-    y2: arrow.endY
-  }];
+
+  // Parallel lines (denom close to 0): Check if collinear
+  const cross = (x3 - x1) * d1y - (y3 - y1) * d1x;
+  const lenSq1 = d1x * d1x + d1y * d1y;
+  // If normalized cross product distance is small, they lie on the same line
+  if (lenSq1 > 1e-8 && (cross * cross) / lenSq1 > 1e-4) {
+    return false; // Parallel but separated
+  }
+
+  // Collinear: Check 1D interval projection overlap
+  if (Math.abs(d1x) >= Math.abs(d1y)) {
+    const min1 = Math.min(x1, x2);
+    const max1 = Math.max(x1, x2);
+    const min2 = Math.min(x3, x4);
+    const max2 = Math.max(x3, x4);
+    return Math.max(min1, min2) <= Math.min(max1, max2) + 1e-4;
+  } else {
+    const min1 = Math.min(y1, y2);
+    const max1 = Math.max(y1, y2);
+    const min2 = Math.min(y3, y4);
+    const max2 = Math.max(y3, y4);
+    return Math.max(min1, min2) <= Math.min(max1, max2) + 1e-4;
+  }
 }
 
-// Get the arrowhead position and direction
+/**
+ * Squared distance from point (px, py) to line segment (x1, y1)-(x2, y2).
+ */
+export function pointToSegmentDistanceSq(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-8) {
+    const ex = px - x1;
+    const ey = py - y1;
+    return ex * ex + ey * ey;
+  }
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = x1 + t * dx;
+  const projY = y1 + t * dy;
+  const diffX = px - projX;
+  const diffY = py - projY;
+  return diffX * diffX + diffY * diffY;
+}
+
+/**
+ * Shortest Euclidean distance between two line segments (p1-p2 and p3-p4).
+ */
+export function segmentDistance(x1, y1, x2, y2, x3, y3, x4, y4) {
+  if (linesIntersect(x1, y1, x2, y2, x3, y3, x4, y4)) {
+    return 0;
+  }
+  const d1 = pointToSegmentDistanceSq(x1, y1, x3, y3, x4, y4);
+  const d2 = pointToSegmentDistanceSq(x2, y2, x3, y3, x4, y4);
+  const d3 = pointToSegmentDistanceSq(x3, y3, x1, y1, x2, y2);
+  const d4 = pointToSegmentDistanceSq(x4, y4, x1, y1, x2, y2);
+  return Math.sqrt(Math.min(d1, d2, d3, d4));
+}
+
+/**
+ * Get arrowhead base point and heading direction.
+ */
 export function getArrowHead(arrow) {
   if (arrow.type === 'bent' && arrow.points && arrow.points.length >= 2) {
     const last = arrow.points[arrow.points.length - 1];
@@ -53,80 +103,281 @@ export function getArrowHead(arrow) {
   return { x: arrow.endX, y: arrow.endY, dir: arrow.dir };
 }
 
-// Check if an arrow can escape without colliding with walls or other arrows
+/**
+ * Get exact arrowhead geometry matching GameScreen.jsx rendering:
+ * Tip extends 10px in arrow.dir, wings extend 6px laterally.
+ */
+export function getArrowHeadTriangle(arrow) {
+  const head = getArrowHead(arrow);
+  const headX = head.x;
+  const headY = head.y;
+  const dir = head.dir;
+  const headSize = 10;
+
+  let tip, wing1, wing2;
+  if (dir === 'up') {
+    tip = { x: headX, y: headY - headSize };
+    wing1 = { x: headX - 6, y: headY + 2 };
+    wing2 = { x: headX + 6, y: headY + 2 };
+  } else if (dir === 'down') {
+    tip = { x: headX, y: headY + headSize };
+    wing1 = { x: headX - 6, y: headY - 2 };
+    wing2 = { x: headX + 6, y: headY - 2 };
+  } else if (dir === 'left') {
+    tip = { x: headX - headSize, y: headY };
+    wing1 = { x: headX + 2, y: headY - 6 };
+    wing2 = { x: headX + 2, y: headY + 6 };
+  } else {
+    // right
+    tip = { x: headX + headSize, y: headY };
+    wing1 = { x: headX - 2, y: headY - 6 };
+    wing2 = { x: headX - 2, y: headY + 6 };
+  }
+  return { tip, wing1, wing2, base: { x: headX, y: headY } };
+}
+
+/**
+ * Get all line segments that make up an arrow.
+ * If includeHead=true (default), includes the arrowhead triangle segments as well.
+ */
+export function getArrowSegments(arrow, includeHead = true) {
+  const segs = [];
+
+  // 1. Shaft segments
+  if (arrow.type === 'bent' && arrow.points && arrow.points.length >= 2) {
+    for (let i = 0; i < arrow.points.length - 1; i++) {
+      segs.push({
+        x1: arrow.points[i].x,
+        y1: arrow.points[i].y,
+        x2: arrow.points[i + 1].x,
+        y2: arrow.points[i + 1].y
+      });
+    }
+  } else {
+    segs.push({
+      x1: arrow.startX,
+      y1: arrow.startY,
+      x2: arrow.endX,
+      y2: arrow.endY
+    });
+  }
+
+  // 2. Arrowhead triangle edges
+  if (includeHead) {
+    const { tip, wing1, wing2, base } = getArrowHeadTriangle(arrow);
+    segs.push({ x1: base.x, y1: base.y, x2: tip.x, y2: tip.y });
+    segs.push({ x1: wing1.x, y1: wing1.y, x2: tip.x, y2: tip.y });
+    segs.push({ x1: wing2.x, y1: wing2.y, x2: tip.x, y2: tip.y });
+    segs.push({ x1: wing1.x, y1: wing1.y, x2: wing2.x, y2: wing2.y });
+  }
+
+  return segs;
+}
+
+/**
+ * Get all significant vertices of an arrow (shaft points + arrowhead points).
+ */
+export function getArrowPoints(arrow) {
+  const pts = [];
+  if (arrow.type === 'bent' && arrow.points) {
+    pts.push(...arrow.points);
+  } else {
+    pts.push({ x: arrow.startX, y: arrow.startY });
+    pts.push({ x: arrow.endX, y: arrow.endY });
+  }
+  const { tip, wing1, wing2 } = getArrowHeadTriangle(arrow);
+  pts.push(tip, wing1, wing2);
+  return pts;
+}
+
+/**
+ * Check collision between two segment sets at a specific translation offset (shiftX, shiftY).
+ */
+function testCollisionAtOffset(arrowSegs, obstacles, shiftX, shiftY, threshold) {
+  for (const seg of arrowSegs) {
+    const ax1 = seg.x1 + shiftX;
+    const ay1 = seg.y1 + shiftY;
+    const ax2 = seg.x2 + shiftX;
+    const ay2 = seg.y2 + shiftY;
+
+    for (const obs of obstacles) {
+      const dist = segmentDistance(ax1, ay1, ax2, ay2, obs.x1, obs.y1, obs.x2, obs.y2);
+      if (dist <= threshold) {
+        return { hit: true, obstacle: obs };
+      }
+    }
+  }
+  return { hit: false };
+}
+
+/**
+ * BENT ARROWS: Modeled as rigid-body translation in the arrowhead direction (arrow.dir).
+ * This exactly matches the CSS SVG `translate(dx, dy)` animation in GameScreen.jsx.
+ *
+ * Check if an arrow can escape without colliding with walls or other arrows.
+ * Uses continuous sweep with sub-step refinement to prevent tunneling and return exact hit distance.
+ */
 export function checkArrowEscape(arrow, otherArrows, walls) {
   const head = getArrowHead(arrow);
   const dirVec = DIRECTIONS[head.dir];
-  if (!dirVec) return { canEscape: true };
+  if (!dirVec) return { canEscape: true, distance: 300 };
 
-  // In Arrow Escape, the arrow moves along head.dir.
-  // We project each segment of the arrow in the direction of movement.
-  const arrowSegs = getArrowSegments(arrow);
+  const arrowSegs = getArrowSegments(arrow, true);
+  const arrowPoints = getArrowPoints(arrow);
 
-  // Cast ray from each vertex and check path clearance up to board boundary (500px)
+  // Pre-extract wall segments
+  const wallSegs = [];
+  for (const w of walls) {
+    wallSegs.push({ x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2, wallRef: w });
+  }
+
+  // Pre-extract other arrow segments
+  const otherArrowSegsList = [];
+  for (const other of otherArrows) {
+    if (other.id === arrow.id) continue;
+    const oSegs = getArrowSegments(other, true);
+    for (const os of oSegs) {
+      otherArrowSegsList.push({ ...os, arrowRef: other });
+    }
+  }
+
+  // Sweep parameters: stepSize=2px guarantees no tunneling because
+  // collision radii (3.2px and 2.8px) exceed stepSize, ensuring continuous coverage.
+  const stepSize = 2;
   const maxDistance = 600;
-  const stepSize = 4;
-  const steps = Math.ceil(maxDistance / stepSize);
+  const maxSteps = Math.ceil(maxDistance / stepSize);
 
-  // For high performance and smooth precision, check bounding sweep of each arrow segment
-  for (let s = 1; s <= steps; s++) {
+  // Initial rest check (dist = 0)
+  const restWall = testCollisionAtOffset(arrowSegs, wallSegs, 0, 0, WALL_COLLISION_RADIUS);
+  if (restWall.hit) {
+    return {
+      canEscape: false,
+      distance: 0,
+      hitPoint: { x: head.x, y: head.y },
+      blocker: 'wall',
+      blockerObj: restWall.obstacle.wallRef
+    };
+  }
+
+  const restArrow = testCollisionAtOffset(arrowSegs, otherArrowSegsList, 0, 0, ARROW_COLLISION_RADIUS);
+  if (restArrow.hit) {
+    return {
+      canEscape: false,
+      distance: 0,
+      hitPoint: { x: head.x, y: head.y },
+      blocker: 'arrow',
+      blockerObj: restArrow.obstacle.arrowRef
+    };
+  }
+
+  for (let s = 1; s <= maxSteps; s++) {
     const dist = s * stepSize;
     const shiftX = dirVec.dx * dist;
     const shiftY = dirVec.dy * dist;
 
-    // Check collision of shifted arrow segments against walls
-    for (const seg of arrowSegs) {
-      const movedX1 = seg.x1 + shiftX;
-      const movedY1 = seg.y1 + shiftY;
-      const movedX2 = seg.x2 + shiftX;
-      const movedY2 = seg.y2 + shiftY;
-
-      // Check walls
-      for (const wall of walls) {
-        if (linesIntersect(movedX1, movedY1, movedX2, movedY2, wall.x1, wall.y1, wall.x2, wall.y2)) {
-          return { canEscape: false, blocker: 'wall', wall };
+    // 1. Check wall collision
+    const wallHit = testCollisionAtOffset(arrowSegs, wallSegs, shiftX, shiftY, WALL_COLLISION_RADIUS);
+    if (wallHit.hit) {
+      // Sub-step binary refinement for exact contact distance
+      let low = dist - stepSize;
+      let high = dist;
+      for (let b = 0; b < 4; b++) {
+        const mid = (low + high) / 2;
+        const midHit = testCollisionAtOffset(arrowSegs, wallSegs, dirVec.dx * mid, dirVec.dy * mid, WALL_COLLISION_RADIUS);
+        if (midHit.hit) {
+          high = mid;
+        } else {
+          low = mid;
         }
       }
+      const finalDist = Math.max(0, high);
+      return {
+        canEscape: false,
+        distance: finalDist,
+        hitPoint: { x: head.x + dirVec.dx * finalDist, y: head.y + dirVec.dy * finalDist },
+        blocker: 'wall',
+        blockerObj: wallHit.obstacle.wallRef
+      };
+    }
 
-      // Check other arrows
-      for (const other of otherArrows) {
-        if (other.id === arrow.id) continue;
-        const otherSegs = getArrowSegments(other);
-        for (const oSeg of otherSegs) {
-          if (linesIntersect(movedX1, movedY1, movedX2, movedY2, oSeg.x1, oSeg.y1, oSeg.x2, oSeg.y2)) {
-            return { canEscape: false, blocker: 'arrow', otherArrow: other };
-          }
+    // 2. Check other arrow collision
+    const arrowHit = testCollisionAtOffset(arrowSegs, otherArrowSegsList, shiftX, shiftY, ARROW_COLLISION_RADIUS);
+    if (arrowHit.hit) {
+      let low = dist - stepSize;
+      let high = dist;
+      for (let b = 0; b < 4; b++) {
+        const mid = (low + high) / 2;
+        const midHit = testCollisionAtOffset(arrowSegs, otherArrowSegsList, dirVec.dx * mid, dirVec.dy * mid, ARROW_COLLISION_RADIUS);
+        if (midHit.hit) {
+          high = mid;
+        } else {
+          low = mid;
         }
       }
+      const finalDist = Math.max(0, high);
+      return {
+        canEscape: false,
+        distance: finalDist,
+        hitPoint: { x: head.x + dirVec.dx * finalDist, y: head.y + dirVec.dy * finalDist },
+        blocker: 'arrow',
+        blockerObj: arrowHit.obstacle.arrowRef
+      };
     }
 
-    // Check if the entire shifted arrow has cleared the board bounding box (-50 to 450)
-    let allPointsOut = true;
-    for (const seg of arrowSegs) {
-      const px1 = seg.x1 + shiftX;
-      const py1 = seg.y1 + shiftY;
-      const px2 = seg.x2 + shiftX;
-      const py2 = seg.y2 + shiftY;
-      if (px1 >= 0 && px1 <= CANVAS_SIZE && py1 >= 0 && py1 <= CANVAS_SIZE) {
-        allPointsOut = false;
-        break;
+    // 3. Clear boundary check: all arrow vertices must be completely past the board boundary
+    const margin = 6;
+    let hasCleared = false;
+    if (head.dir === 'right') {
+      let minX = Infinity;
+      for (const p of arrowPoints) {
+        const px = p.x + shiftX;
+        if (px < minX) minX = px;
       }
-      if (px2 >= 0 && px2 <= CANVAS_SIZE && py2 >= 0 && py2 <= CANVAS_SIZE) {
-        allPointsOut = false;
-        break;
+      hasCleared = minX > CANVAS_SIZE + margin;
+    } else if (head.dir === 'left') {
+      let maxX = -Infinity;
+      for (const p of arrowPoints) {
+        const px = p.x + shiftX;
+        if (px > maxX) maxX = px;
       }
+      hasCleared = maxX < -margin;
+    } else if (head.dir === 'down') {
+      let minY = Infinity;
+      for (const p of arrowPoints) {
+        const py = p.y + shiftY;
+        if (py < minY) minY = py;
+      }
+      hasCleared = minY > CANVAS_SIZE + margin;
+    } else if (head.dir === 'up') {
+      let maxY = -Infinity;
+      for (const p of arrowPoints) {
+        const py = p.y + shiftY;
+        if (py > maxY) maxY = py;
+      }
+      hasCleared = maxY < -margin;
     }
 
-    if (allPointsOut) {
-      // It has escaped past the board with no collisions!
-      return { canEscape: true };
+    if (hasCleared) {
+      return {
+        canEscape: true,
+        distance: dist,
+        exitDistance: dist
+      };
     }
   }
 
-  return { canEscape: true };
+  // Reached max distance without clearing or colliding
+  return {
+    canEscape: false,
+    distance: maxDistance,
+    hitPoint: { x: head.x + dirVec.dx * maxDistance, y: head.y + dirVec.dy * maxDistance },
+    blocker: 'boundary'
+  };
 }
 
-// Find a valid next move (used for the 💡 Hint power-up and auto solver)
+/**
+ * Find a valid next move (used for the 💡 Hint power-up and auto solver).
+ */
 export function findHint(arrows, walls) {
   for (const arrow of arrows) {
     const res = checkArrowEscape(arrow, arrows, walls);
@@ -137,20 +388,27 @@ export function findHint(arrows, walls) {
   return null;
 }
 
-// Laser trajectory preview: compute trajectory line for an arrow until it hits or escapes
+/**
+ * Laser trajectory preview: compute laser beam line stopping exactly at the obstacle
+ * or continuing to the edge of the board if clear.
+ */
 export function getArrowTrajectory(arrow, otherArrows, walls) {
   const head = getArrowHead(arrow);
   const dirVec = DIRECTIONS[head.dir];
   if (!dirVec) return null;
 
   const escapeRes = checkArrowEscape(arrow, otherArrows, walls);
-  const distance = escapeRes.canEscape ? 300 : 35; // short red line if blocked, long line if clear
+  const distance = escapeRes.distance;
 
   return {
     startX: head.x,
     startY: head.y,
     endX: head.x + dirVec.dx * distance,
     endY: head.y + dirVec.dy * distance,
-    canEscape: escapeRes.canEscape
+    canEscape: escapeRes.canEscape,
+    distance: distance,
+    hitPoint: escapeRes.hitPoint,
+    blocker: escapeRes.blocker,
+    blockerObj: escapeRes.blockerObj
   };
 }
